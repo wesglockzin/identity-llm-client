@@ -1,79 +1,92 @@
 # Identity LLM Client
 
-## The Problem
+A small, dependency-free Python client for **local** LLM inference through
+[Ollama](https://ollama.com)'s OpenAI-compatible endpoints. Written for
+identity tooling where SAML configs, authentication logs and federation
+metadata must not leave the host.
 
-Identity tools in a federal environment need AI-assisted analysis — but identity data (SAML configs, authentication logs, federation metadata, application credentials) cannot be sent to cloud AI APIs. The constraint isn't optional: data that leaves the perimeter is data outside your control.
+## Why it exists
 
-The solution is local inference. But building a separate LLM integration into each tool creates inconsistency and maintenance burden. This library solves that.
+Identity data can't go to a cloud model. Local inference solves that, but
+every tool growing its own Ollama integration is the wrong shape. This module
+is the one place the calls go through: one request helper, one streaming
+parser, one model map, one error path.
 
-## What It Does
+It's used by the AI analysis panel in
+[adfs-to-okta-migration](https://github.com/wesglockzin/adfs-to-okta-migration).
 
-A shared Python client library for local LLM inference via Ollama. Used across 5+ production identity tools:
+## What's in it
 
-- **adfs-okta-migration-tool** — AI scan layer for configuration anomaly detection
-- **Identity Intelligence Platform** — Cross-tool posture analysis and drift detection *(in development)*
-
-**Key capabilities:**
-
-- Simple query interface: send a prompt, get a response
-- Configurable model selection (deep reasoning vs. fast queries)
-- Designed for sensitive data: all inference runs locally, zero network egress
-- Consistent error handling and timeout management across all tools
-
-## Why It's Built This Way
-
-- **Local-first**: Ollama serves models at `localhost:11434`. Zero cloud API calls. Sensitive identity data never leaves the host.
-- **Shared library pattern**: One client, consistent behavior across all tools. Update inference logic in one place.
-- **Model flexibility**: Different tasks need different models. The client abstracts model selection.
-
-## Models
-
-| Model | Use Case |
+| Function | What it does |
 |---|---|
-| Qwen 2.5 72B Q4_K_M | Primary — deep reasoning, SAML/policy analysis, complex queries |
-| Qwen 2.5 Coder 32B | Code tasks, quick queries |
-| Nomic Embed Text | RAG/semantic search *(planned)* |
+| `ask(prompt, context=None, model="reason", system=...)` | One-shot chat completion; returns the response text |
+| `ask_stream(prompt, context=None, model="reason", system=...)` | Same call, yields text chunks as they arrive (for Flask SSE endpoints) |
+| `embed(text)` | Returns an embedding vector (`nomic-embed-text`, 768 floats) |
+| `health()` | Checks Ollama is up and which of the expected models are present |
 
-## Infrastructure
+`model` is a role, not a model name: `"reason"` → `qwen2.5:72b` for deep
+analysis, `"fast"` → `qwen2.5-coder:32b` for quick queries and config parsing.
+Edit `MODELS` in `llm/client.py` to change the mapping.
 
-- Ollama 0.15.4+ running as a persistent service (`localhost:11434`)
-- Qwen 2.5 72B loaded into memory (~47GB) for instant first-query response
-- Optional: Open WebUI for direct chat interface (`localhost:8080`)
+`system` defaults to an IAM-analyst persona (ADFS claim rules, Okta
+policies, SAML/OIDC mechanics). Pass your own `system=` string to replace it,
+or `system=""` for none.
 
-## Tech Stack
+## Usage
 
-- Python 3.11+
-- Ollama (local model serving)
-- Qwen 2.5 72B (primary reasoning model)
+```python
+from llm.client import ask, ask_stream, embed, health
 
-## Setup
+print(health())                                   # {"status": "ok", "missing": []}
 
-1. Install Ollama: https://ollama.com
+answer = ask("What does this claim rule do?", context=rule_text)
 
-2. Pull the primary model:
-```bash
-ollama pull qwen2.5:72b
+for chunk in ask_stream("Summarize the anomalies", context=scan_json):
+    print(chunk, end="", flush=True)
+
+vector = embed("Okta routing rule for group finance-users")
 ```
 
-3. Start the Ollama service:
+The module lives at `llm/client.py`; import it from the repository root (or
+copy the file into your tool — it has no third-party dependencies).
+
+## Requirements
+
+- Python 3.9+ (uses only the standard library)
+- Ollama running on `localhost:11434` with the models you map:
+
 ```bash
+ollama pull qwen2.5:72b
+ollama pull qwen2.5-coder:32b
+ollama pull nomic-embed-text
 ollama serve
 ```
 
-4. Import the client:
-```python
-from llm.client import LLMClient
-```
+The 72B model at Q4 needs roughly 47 GB of memory to stay resident.
 
-## Status
+## Behaviour worth knowing
 
-**Production — Phase 1 complete.** Shared client in active use across the migration tool and coworker assistant. Identity Intelligence Platform integration in development.
+- **Timeouts are fixed:** 300 s for completions, 5 s for `health()`.
+- **Errors are raised as `RuntimeError`** with the Ollama base URL in the
+  message. Today an HTTP error from Ollama (404 unknown model, 400 bad
+  request) is reported with the same "unreachable" wording as a connection
+  failure — see *Known limitations*.
+- **Streaming** parses Ollama's `data: {...}` / `data: [DONE]` SSE lines and
+  yields only the content deltas.
 
----
+## Known limitations
 
-## Part of
+- `OLLAMA_BASE` is a constant; an environment-variable override is the next
+  change.
+- `HTTPError` is caught as `URLError`, so server-side errors are mislabeled
+  as "unreachable" and Ollama's error body is discarded.
+- No structured-output (`format=json` / schema) path yet.
+- Not packaged for `pip install`; no tests yet.
 
-This library is a core component of the **Identity Intelligence Platform** — a suite of tools for AI-assisted identity posture analysis in federal environments.
+## License
 
-**Related repos:**
-- [adfs-to-okta-migration](https://github.com/wesglockzin/adfs-to-okta-migration)
+MIT.
+
+## Author
+
+Wes Glockzin
