@@ -296,11 +296,27 @@ def test_redirect_is_refused_and_key_not_forwarded(fake, monkeypatch):
         monkeypatch.setenv("LLM_API_KEY", FAKE_KEY)
         other.routes["/v1/chat/completions"] = (200, chat_body("leaked"))
         target = other.url + "/v1/chat/completions"
-        fake.routes["/v1/chat/completions"] = (307, b"", ("Location", target))
-        with pytest.raises(RuntimeError, match="307"):
+        # 302 on a POST is one urllib would follow (as a GET) without the guard.
+        fake.routes["/v1/chat/completions"] = (302, b"", ("Location", target))
+        with pytest.raises(RuntimeError, match="302"):
             client.ask("q")
-        with pytest.raises(RuntimeError, match="307"):
+        with pytest.raises(RuntimeError, match="302"):
             list(client.ask_stream("q"))
+        assert other.requests == []
+    finally:
+        other.close()
+
+
+def test_health_redirect_is_refused(fake, monkeypatch):
+    other = FakeOllama()
+    try:
+        monkeypatch.setenv("LLM_API_KEY", FAKE_KEY)
+        other.routes["/api/tags"] = (200, b'{"models": []}')
+        target = other.url + "/api/tags"
+        fake.routes["/api/tags"] = (302, b"", ("Location", target))
+        result = client.health()
+        assert result["status"] == "error"
+        assert "302" in result["detail"]
         assert other.requests == []
     finally:
         other.close()
