@@ -53,7 +53,7 @@ pulled works; the examples used so far are `qwen2.5:72b` (about 47 GB of memory)
 | `LLM_TIMEOUT` | `300` | Seconds for chat and embedding requests |
 | `LLM_HEALTH_TIMEOUT` | `5` | Seconds for `health()` |
 | `LLM_API_KEY` | unset | Sent as `Authorization: Bearer ...` when set |
-| `LLM_SYSTEM_PROMPT` | built-in IAM prompt | Replaces the default system prompt |
+| `LLM_SYSTEM_PROMPT` | built-in IAM prompt | Replaces the default system prompt (empty counts as unset). Redirects from the server are refused, so `LLM_API_KEY` is never forwarded |
 
 **Upgrading to 2.0:** earlier versions had built-in URL and model defaults.
 Callers such as `adfs-to-okta-migration` must now set `OLLAMA_BASE_URL` and the
@@ -80,7 +80,7 @@ Run the tests with `pytest`; they use a local fake server, not Ollama.
 
 ## Requirements
 
-- Python 3.9+ (uses only the standard library)
+- Python 3.10+ (uses only the standard library)
 - Ollama reachable at `OLLAMA_BASE_URL` with the models you named:
 
 ```bash

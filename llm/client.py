@@ -82,7 +82,7 @@ def model_for(model: str) -> str:
 
 def default_system_prompt() -> str:
     """System prompt from LLM_SYSTEM_PROMPT, else the built-in IAM persona."""
-    return os.environ.get("LLM_SYSTEM_PROMPT", SYSTEM_PROMPT)
+    return os.environ.get("LLM_SYSTEM_PROMPT") or SYSTEM_PROMPT
 
 
 def _float_env(name: str, default: float) -> float:
@@ -108,6 +108,21 @@ def _headers() -> dict:
 
 
 # ── Core request helpers ──────────────────────────────────────────────────────
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so the Authorization header is never forwarded elsewhere."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def _open(req: urllib.request.Request, timeout: float):
+    """Open a request without following redirects (a 3xx becomes an HTTPError)."""
+    return _opener.open(req, timeout=timeout)
 
 
 def _request(path: str, payload: dict) -> urllib.request.Request:
@@ -142,7 +157,7 @@ def _post(path: str, payload: dict) -> dict:
     req = _request(path, payload)
     timeout = _float_env("LLM_TIMEOUT", DEFAULT_TIMEOUT)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open(req, timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as e:
         raise _http_error(e) from e
@@ -161,7 +176,7 @@ def _post_stream(path: str, payload: dict) -> Generator[str, None, None]:
     req = _request(path, payload)
     timeout = _float_env("LLM_TIMEOUT", DEFAULT_TIMEOUT)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open(req, timeout) as resp:
             for raw_line in resp:
                 line = raw_line.decode(errors="replace").strip()
                 if not line or line == "data: [DONE]":
@@ -285,7 +300,7 @@ def health() -> dict:
         expected = models()
         req = urllib.request.Request(f"{base_url()}/api/tags", headers=_headers())
         timeout = _float_env("LLM_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _open(req, timeout) as resp:
             data = json.loads(resp.read())
         entries = data.get("models") if isinstance(data, dict) else None
         if not isinstance(entries, list) or not all(

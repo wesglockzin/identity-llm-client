@@ -25,8 +25,11 @@ class FakeOllama:
                 outer.requests.append(
                     (self.path, json.loads(body) if body else None, dict(self.headers))
                 )
-                status, payload = outer.routes.get(self.path, (404, b"no route"))
+                route = outer.routes.get(self.path, (404, b"no route"))
+                status, payload = route[0], route[1]
                 self.send_response(status)
+                for name, value in route[2:]:
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(payload)
 
@@ -271,7 +274,7 @@ class BrokenBody:
 
 
 def test_socket_errors_while_reading_are_wrapped(fake, monkeypatch):
-    monkeypatch.setattr(client.urllib.request, "urlopen", lambda *a, **k: BrokenBody())
+    monkeypatch.setattr(client, "_open", lambda *a, **k: BrokenBody())
     with pytest.raises(RuntimeError, match="failed"):
         client.ask("q")
     with pytest.raises(RuntimeError, match="failed"):
@@ -285,6 +288,30 @@ def test_api_key_over_plain_http_logs_warning(fake, monkeypatch, caplog):
         client.ask("q")
         client.ask("q")
     assert caplog.text.count("plain http") == 1
+
+
+def test_redirect_is_refused_and_key_not_forwarded(fake, monkeypatch):
+    other = FakeOllama()
+    try:
+        monkeypatch.setenv("LLM_API_KEY", FAKE_KEY)
+        other.routes["/v1/chat/completions"] = (200, chat_body("leaked"))
+        target = other.url + "/v1/chat/completions"
+        fake.routes["/v1/chat/completions"] = (307, b"", ("Location", target))
+        with pytest.raises(RuntimeError, match="307"):
+            client.ask("q")
+        with pytest.raises(RuntimeError, match="307"):
+            list(client.ask_stream("q"))
+        assert other.requests == []
+    finally:
+        other.close()
+
+
+def test_empty_system_prompt_setting_means_unset(fake, monkeypatch):
+    monkeypatch.setenv("LLM_SYSTEM_PROMPT", "")
+    fake.routes["/v1/chat/completions"] = (200, chat_body("ok"))
+    client.ask("q")
+    _, payload, _ = fake.requests[0]
+    assert payload["messages"][0] == {"role": "system", "content": client.SYSTEM_PROMPT}
 
 
 def test_no_warning_without_key_or_over_https(fake, monkeypatch, caplog):

@@ -7,7 +7,7 @@ name = "identity-llm-client"
 version = "2.0.0"
 description = "Dependency-free client for local LLM inference through Ollama's OpenAI-compatible endpoints."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = []
 
