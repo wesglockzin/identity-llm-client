@@ -29,17 +29,13 @@ logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_TIMEOUT = 300.0
 DEFAULT_HEALTH_TIMEOUT = 5.0
 
-DEFAULT_MODELS = {
-    "reason": "qwen2.5:72b",
-    "fast": "qwen2.5-coder:32b",
-    "embed": "nomic-embed-text",
-}
+# The server URL and the model names have no defaults in code. They must be set.
+BASE_URL_ENV_VAR = "OLLAMA_BASE_URL"
 
-# Environment variable that overrides each role's model name.
+# Environment variable that names the model for each role.
 MODEL_ENV_VARS = {
     "reason": "LLM_MODEL_REASON",
     "fast": "LLM_MODEL_FAST",
@@ -57,17 +53,27 @@ Be precise and concise. When analyzing configuration data, flag anomalies, misco
 and security concerns directly. Use IAM terminology accurately."""
 
 
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError(f"{name} is not set; see README.md and .env.example")
+    return value
+
+
 def base_url() -> str:
-    """Ollama base URL from OLLAMA_BASE_URL (no trailing slash)."""
-    return os.environ.get("OLLAMA_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+    """Ollama base URL from OLLAMA_BASE_URL (no trailing slash). Required."""
+    return _required_env(BASE_URL_ENV_VAR).rstrip("/")
 
 
 def models() -> dict:
-    """Role -> model name map, with LLM_MODEL_* overrides applied."""
-    return {
-        role: os.environ.get(MODEL_ENV_VARS[role], default)
-        for role, default in DEFAULT_MODELS.items()
-    }
+    """Role -> model name map from the LLM_MODEL_* settings. All are required."""
+    return {role: _required_env(var) for role, var in MODEL_ENV_VARS.items()}
+
+
+def model_for(model: str) -> str:
+    """Resolve a role to its configured model name; any other string is literal."""
+    var = MODEL_ENV_VARS.get(model)
+    return _required_env(var) if var else model
 
 
 def default_system_prompt() -> str:
@@ -89,6 +95,8 @@ def _headers() -> dict:
     headers = {"Content-Type": "application/json"}
     key = os.environ.get("LLM_API_KEY")
     if key:
+        if base_url().startswith("http://"):
+            logger.warning("LLM_API_KEY is sent over plain http://; prefer https://")
         headers["Authorization"] = f"Bearer {key}"
     return headers
 
@@ -115,9 +123,12 @@ def _http_error(e: urllib.error.HTTPError) -> RuntimeError:
 
 
 def _unreachable(e: urllib.error.URLError) -> RuntimeError:
-    return RuntimeError(
-        f"Ollama unreachable at {base_url()} — is the service running? ({e})"
-    )
+    return RuntimeError(f"Ollama unreachable at {base_url()} — is the service running? ({e})")
+
+
+def _io_failure(e: OSError) -> RuntimeError:
+    """A timeout or socket error after the connection was made."""
+    return RuntimeError(f"Connection to Ollama at {base_url()} failed: {e!r}")
 
 
 def _post(path: str, payload: dict) -> dict:
@@ -131,6 +142,8 @@ def _post(path: str, payload: dict) -> dict:
         raise _http_error(e) from e
     except urllib.error.URLError as e:
         raise _unreachable(e) from e
+    except OSError as e:
+        raise _io_failure(e) from e
     try:
         return json.loads(raw)
     except ValueError as e:
@@ -144,7 +157,7 @@ def _post_stream(path: str, payload: dict) -> Generator[str, None, None]:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             for raw_line in resp:
-                line = raw_line.decode().strip()
+                line = raw_line.decode(errors="replace").strip()
                 if not line or line == "data: [DONE]":
                     continue
                 if line.startswith("data: "):
@@ -163,6 +176,8 @@ def _post_stream(path: str, payload: dict) -> Generator[str, None, None]:
         raise _http_error(e) from e
     except urllib.error.URLError as e:
         raise _unreachable(e) from e
+    except OSError as e:
+        raise _io_failure(e) from e
 
 
 def _chat_payload(
@@ -180,7 +195,7 @@ def _chat_payload(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": full_prompt})
     return {
-        "model": models().get(model, model),
+        "model": model_for(model),
         "messages": messages,
         "stream": stream,
     }
@@ -250,7 +265,7 @@ def embed(text: str) -> list:
     Returns:
         A list of floats representing the embedding vector.
     """
-    payload = {"model": models()["embed"], "input": text}
+    payload = {"model": model_for("embed"), "input": text}
     result = _post("/v1/embeddings", payload)
     try:
         return result["data"][0]["embedding"]
@@ -260,8 +275,8 @@ def embed(text: str) -> list:
 
 def health() -> dict:
     """Check Ollama service and confirm expected models are available."""
-    expected = models()
     try:
+        expected = models()
         req = urllib.request.Request(f"{base_url()}/api/tags", headers=_headers())
         timeout = _float_env("LLM_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT)
         with urllib.request.urlopen(req, timeout=timeout) as resp:

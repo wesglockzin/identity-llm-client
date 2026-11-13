@@ -1,0 +1,8 @@
+# Keep the default rules. The only exception is the test file, which holds
+# dummy values (never real credentials) to check how settings are sent.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Dummy values in the test suite"
+paths = ['''^tests/test_client\.py$''']

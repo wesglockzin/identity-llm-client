@@ -7,6 +7,9 @@ import pytest
 from llm import client
 
 
+MODELS = {"reason": "model-r", "fast": "model-f", "embed": "model-e"}
+
+
 class FakeOllama:
     """Local fake server. `routes` maps path -> (status, body bytes)."""
 
@@ -46,15 +49,14 @@ class FakeOllama:
 @pytest.fixture
 def fake(monkeypatch):
     for name in (
-        "LLM_MODEL_REASON",
-        "LLM_MODEL_FAST",
-        "LLM_MODEL_EMBED",
         "LLM_API_KEY",
         "LLM_SYSTEM_PROMPT",
         "LLM_TIMEOUT",
         "LLM_HEALTH_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
+    for role, model in MODELS.items():
+        monkeypatch.setenv(client.MODEL_ENV_VARS[role], model)
     server = FakeOllama()
     monkeypatch.setenv("OLLAMA_BASE_URL", server.url)
     yield server
@@ -69,7 +71,7 @@ def test_ask_returns_content_and_builds_payload(fake):
     fake.routes["/v1/chat/completions"] = (200, chat_body("hi"))
     assert client.ask("question", context="data", model="fast") == "hi"
     _, payload, _ = fake.requests[0]
-    assert payload["model"] == "qwen2.5-coder:32b"
+    assert payload["model"] == "model-f"
     assert payload["stream"] is False
     assert payload["messages"][0] == {"role": "system", "content": client.SYSTEM_PROMPT}
     assert payload["messages"][1]["content"] == "question\n\ndata"
@@ -93,13 +95,13 @@ def test_empty_system_sends_no_system_message(fake):
 def test_env_overrides(fake, monkeypatch):
     monkeypatch.setenv("LLM_MODEL_REASON", "tiny:1b")
     monkeypatch.setenv("LLM_SYSTEM_PROMPT", "be brief")
-    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("LLM_API_KEY", "dummy")
     fake.routes["/v1/chat/completions"] = (200, chat_body("ok"))
     client.ask("q")
     _, payload, headers = fake.requests[0]
     assert payload["model"] == "tiny:1b"
     assert payload["messages"][0]["content"] == "be brief"
-    assert headers["Authorization"] == "Bearer k"
+    assert headers["Authorization"] == "Bearer " + "dummy"
 
 
 def test_http_error_reports_status_and_body(fake):
@@ -111,7 +113,7 @@ def test_http_error_reports_status_and_body(fake):
     assert "unreachable" not in str(exc.value)
 
 
-def test_unreachable_server(monkeypatch):
+def test_unreachable_server(fake, monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:1")
     with pytest.raises(RuntimeError, match="unreachable"):
         client.ask("q")
@@ -169,18 +171,18 @@ def test_stream_http_error(fake):
 def test_embed(fake):
     fake.routes["/v1/embeddings"] = (200, b'{"data": [{"embedding": [0.5, 1.5]}]}')
     assert client.embed("text") == [0.5, 1.5]
-    assert fake.requests[0][1]["model"] == "nomic-embed-text"
+    assert fake.requests[0][1]["model"] == "model-e"
     fake.routes["/v1/embeddings"] = (200, b'{"data": []}')
     with pytest.raises(RuntimeError, match="shape"):
         client.embed("text")
 
 
 def test_health_ok_and_missing(fake):
-    tags = {"models": [{"name": "qwen2.5:72b"}, {"name": "nomic-embed-text:latest"}]}
+    tags = {"models": [{"name": "model-r"}, {"name": "model-e:latest"}]}
     fake.routes["/api/tags"] = (200, json.dumps(tags).encode())
     result = client.health()
     assert result["status"] == "ok"
-    assert result["missing"] == ["qwen2.5-coder:32b"]
+    assert result["missing"] == ["model-f"]
 
 
 def test_health_errors_do_not_raise(fake, monkeypatch):
@@ -189,3 +191,60 @@ def test_health_errors_do_not_raise(fake, monkeypatch):
     assert client.health()["status"] == "error"
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:1")
     assert client.health()["status"] == "error"
+
+
+def test_health_bad_timeout_does_not_raise(fake, monkeypatch):
+    fake.routes["/api/tags"] = (200, b'{"models": []}')
+    monkeypatch.setenv("LLM_HEALTH_TIMEOUT", "soon")
+    result = client.health()
+    assert result["status"] == "error"
+    assert "LLM_HEALTH_TIMEOUT" in result["detail"]
+
+
+def test_missing_base_url_setting(fake, monkeypatch):
+    monkeypatch.delenv("OLLAMA_BASE_URL")
+    with pytest.raises(ValueError, match="OLLAMA_BASE_URL"):
+        client.ask("q")
+    assert client.health()["status"] == "error"
+
+
+def test_missing_model_setting(fake, monkeypatch):
+    fake.routes["/v1/chat/completions"] = (200, chat_body("ok"))
+    monkeypatch.delenv("LLM_MODEL_REASON")
+    with pytest.raises(ValueError, match="LLM_MODEL_REASON"):
+        client.ask("q")
+    # A literal model name needs no role setting.
+    assert client.ask("q", model="literal:1b") == "ok"
+    assert client.health()["status"] == "error"
+
+
+class BrokenBody:
+    """Stands in for an HTTP response whose socket fails while being read."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        raise TimeoutError("timed out")
+
+    def __iter__(self):
+        raise ConnectionResetError("reset")
+
+
+def test_socket_errors_while_reading_are_wrapped(fake, monkeypatch):
+    monkeypatch.setattr(client.urllib.request, "urlopen", lambda *a, **k: BrokenBody())
+    with pytest.raises(RuntimeError, match="failed"):
+        client.ask("q")
+    with pytest.raises(RuntimeError, match="failed"):
+        list(client.ask_stream("q"))
+
+
+def test_api_key_over_plain_http_logs_warning(fake, monkeypatch, caplog):
+    monkeypatch.setenv("LLM_API_KEY", "dummy")
+    fake.routes["/v1/chat/completions"] = (200, chat_body("ok"))
+    with caplog.at_level("WARNING", logger="llm.client"):
+        client.ask("q")
+    assert "plain http" in caplog.text

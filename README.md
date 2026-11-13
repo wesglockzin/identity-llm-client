@@ -21,13 +21,13 @@ It's used by the AI analysis panel in
 |---|---|
 | `ask(prompt, context=None, model="reason", system=...)` | One-shot chat completion; returns the response text |
 | `ask_stream(prompt, context=None, model="reason", system=...)` | Same call, yields text chunks as they arrive (for Flask SSE endpoints) |
-| `embed(text)` | Returns an embedding vector (`nomic-embed-text`, 768 floats) |
+| `embed(text)` | Returns an embedding vector from the `LLM_MODEL_EMBED` model |
 | `health()` | Checks Ollama is up and which of the expected models are present |
 
-`model` is a role or a literal model name: `"reason"` → `qwen2.5:72b` for deep
-analysis, `"fast"` → `qwen2.5-coder:32b` for quick queries and config parsing.
-Any other string is sent as the model name unchanged. Change the mapping with
-the `LLM_MODEL_*` settings below.
+`model` is a role or a literal model name: `"reason"` is for deep analysis and
+`"fast"` is for quick queries and config parsing. Each role maps to the model
+named in its `LLM_MODEL_*` setting below. Any other string is sent as the
+model name unchanged.
 
 `system` defaults to an IAM-analyst persona (ADFS claim rules, Okta
 policies, SAML/OIDC mechanics). Pass your own `system=` string to replace it,
@@ -37,15 +37,19 @@ or `system=""` to send no system message.
 
 ## Settings
 
-All settings are environment variables, read on each call. All are optional.
+All settings are environment variables, read on each call. The server URL and
+the model names have no default and must be set; the rest are optional.
 They are also listed in `.env.example` (the library does not load `.env` itself).
+For a local Ollama the URL is `http://localhost:11434`. Any model you have
+pulled works; the examples used so far are `qwen2.5:72b` (about 47 GB of memory),
+`qwen2.5-coder:32b` and `nomic-embed-text` (embeddings).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Server base URL |
-| `LLM_MODEL_REASON` | `qwen2.5:72b` | Model for role `reason` |
-| `LLM_MODEL_FAST` | `qwen2.5-coder:32b` | Model for role `fast` |
-| `LLM_MODEL_EMBED` | `nomic-embed-text` | Model for `embed()` |
+| `OLLAMA_BASE_URL` | none, required | Server base URL |
+| `LLM_MODEL_REASON` | none, required | Model for role `reason` |
+| `LLM_MODEL_FAST` | none, required | Model for role `fast` |
+| `LLM_MODEL_EMBED` | none, required | Model for `embed()` |
 | `LLM_TIMEOUT` | `300` | Seconds for chat and embedding requests |
 | `LLM_HEALTH_TIMEOUT` | `5` | Seconds for `health()` |
 | `LLM_API_KEY` | unset | Sent as `Authorization: Bearer ...` when set |
@@ -73,24 +77,26 @@ Run the tests with `pytest`; they use a local fake server, not Ollama.
 ## Requirements
 
 - Python 3.9+ (uses only the standard library)
-- Ollama reachable at `OLLAMA_BASE_URL` with the models you map:
+- Ollama reachable at `OLLAMA_BASE_URL` with the models you named:
 
 ```bash
-ollama pull qwen2.5:72b
-ollama pull qwen2.5-coder:32b
-ollama pull nomic-embed-text
+ollama pull <model>     # once per LLM_MODEL_* value
 ollama serve
 ```
-
-The 72B model at Q4 needs roughly 47 GB of memory to stay resident.
 
 ## Behaviour worth knowing
 
 - **Errors are raised as `RuntimeError`.** An HTTP error from Ollama (404
   unknown model, 400 bad request) reports the status and response body; a
-  connection failure says "unreachable". Malformed or unexpected responses
-  are also `RuntimeError`. A non-numeric timeout setting raises `ValueError`.
-- **`health()` never raises**; it returns `{"status": "error", "detail": ...}`.
+  connection failure says "unreachable", and a timeout or socket error while
+  reading is also a `RuntimeError`. Malformed or unexpected responses are
+  `RuntimeError` too. A missing required setting or a non-numeric
+  `LLM_TIMEOUT` raises `ValueError` from `ask`, `ask_stream` and `embed`.
+- **Error text is for developers.** Messages include the server's response
+  body. Do not show them to end users unfiltered.
+- **`health()` never raises**, including for a missing or invalid setting
+  such as `LLM_HEALTH_TIMEOUT=soon`; it returns
+  `{"status": "error", "detail": ...}` and logs a warning.
 - **Streaming** parses Ollama's `data: {...}` / `data: [DONE]` SSE lines and
   yields only the content deltas.
 
@@ -98,11 +104,11 @@ The 72B model at Q4 needs roughly 47 GB of memory to stay resident.
 
 - No structured-output (`format=json` / schema) path yet.
 - `health()` uses Ollama's `/api/tags`, so it works only against Ollama.
-- Plain `http://` by default; use an `https://` base URL for remote servers.
+- Plain `http://` is allowed; use an `https://` base URL for remote servers.
+  A warning is logged when `LLM_API_KEY` is sent over `http://`.
 - `context` is placed in the prompt unchanged, so untrusted text can carry
   prompt injection.
-- The default models are large (the 72B model needs about 47 GB); set
-  `LLM_MODEL_*` for smaller hardware.
+- Large models need a lot of memory; pick `LLM_MODEL_*` values that fit your hardware.
 
 ## License
 
