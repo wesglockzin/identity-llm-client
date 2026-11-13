@@ -24,13 +24,32 @@ It's used by the AI analysis panel in
 | `embed(text)` | Returns an embedding vector (`nomic-embed-text`, 768 floats) |
 | `health()` | Checks Ollama is up and which of the expected models are present |
 
-`model` is a role, not a model name: `"reason"` → `qwen2.5:72b` for deep
+`model` is a role or a literal model name: `"reason"` → `qwen2.5:72b` for deep
 analysis, `"fast"` → `qwen2.5-coder:32b` for quick queries and config parsing.
-Edit `MODELS` in `llm/client.py` to change the mapping.
+Any other string is sent as the model name unchanged. Change the mapping with
+the `LLM_MODEL_*` settings below.
 
 `system` defaults to an IAM-analyst persona (ADFS claim rules, Okta
 policies, SAML/OIDC mechanics). Pass your own `system=` string to replace it,
-or `system=""` for none.
+or `system=""` to send no system message.
+
+**Type:** library. Install with `pip install -e .`; there is no command to run.
+
+## Settings
+
+All settings are environment variables, read on each call. All are optional.
+They are also listed in `.env.example` (the library does not load `.env` itself).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Server base URL |
+| `LLM_MODEL_REASON` | `qwen2.5:72b` | Model for role `reason` |
+| `LLM_MODEL_FAST` | `qwen2.5-coder:32b` | Model for role `fast` |
+| `LLM_MODEL_EMBED` | `nomic-embed-text` | Model for `embed()` |
+| `LLM_TIMEOUT` | `300` | Seconds for chat and embedding requests |
+| `LLM_HEALTH_TIMEOUT` | `5` | Seconds for `health()` |
+| `LLM_API_KEY` | unset | Sent as `Authorization: Bearer ...` when set |
+| `LLM_SYSTEM_PROMPT` | built-in IAM prompt | Replaces the default system prompt |
 
 ## Usage
 
@@ -47,13 +66,14 @@ for chunk in ask_stream("Summarize the anomalies", context=scan_json):
 vector = embed("Okta routing rule for group finance-users")
 ```
 
-The module lives at `llm/client.py`; import it from the repository root (or
-copy the file into your tool — it has no third-party dependencies).
+The module lives at `llm/client.py`. Install it with `pip install -e .`
+(add `.[dev]` for the tests and linter); it has no third-party dependencies.
+Run the tests with `pytest`; they use a local fake server, not Ollama.
 
 ## Requirements
 
 - Python 3.9+ (uses only the standard library)
-- Ollama running on `localhost:11434` with the models you map:
+- Ollama reachable at `OLLAMA_BASE_URL` with the models you map:
 
 ```bash
 ollama pull qwen2.5:72b
@@ -66,22 +86,23 @@ The 72B model at Q4 needs roughly 47 GB of memory to stay resident.
 
 ## Behaviour worth knowing
 
-- **Timeouts are fixed:** 300 s for completions, 5 s for `health()`.
-- **Errors are raised as `RuntimeError`** with the Ollama base URL in the
-  message. Today an HTTP error from Ollama (404 unknown model, 400 bad
-  request) is reported with the same "unreachable" wording as a connection
-  failure — see *Known limitations*.
+- **Errors are raised as `RuntimeError`.** An HTTP error from Ollama (404
+  unknown model, 400 bad request) reports the status and response body; a
+  connection failure says "unreachable". Malformed or unexpected responses
+  are also `RuntimeError`. A non-numeric timeout setting raises `ValueError`.
+- **`health()` never raises**; it returns `{"status": "error", "detail": ...}`.
 - **Streaming** parses Ollama's `data: {...}` / `data: [DONE]` SSE lines and
   yields only the content deltas.
 
 ## Known limitations
 
-- `OLLAMA_BASE` is a constant; an environment-variable override is the next
-  change.
-- `HTTPError` is caught as `URLError`, so server-side errors are mislabeled
-  as "unreachable" and Ollama's error body is discarded.
 - No structured-output (`format=json` / schema) path yet.
-- Not packaged for `pip install`; no tests yet.
+- `health()` uses Ollama's `/api/tags`, so it works only against Ollama.
+- Plain `http://` by default; use an `https://` base URL for remote servers.
+- `context` is placed in the prompt unchanged, so untrusted text can carry
+  prompt injection.
+- The default models are large (the 72B model needs about 47 GB); set
+  `LLM_MODEL_*` for smaller hardware.
 
 ## License
 
