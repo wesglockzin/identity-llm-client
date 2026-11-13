@@ -21,23 +21,55 @@ It's used by the AI analysis panel in
 |---|---|
 | `ask(prompt, context=None, model="reason", system=...)` | One-shot chat completion; returns the response text |
 | `ask_stream(prompt, context=None, model="reason", system=...)` | Same call, yields text chunks as they arrive (for Flask SSE endpoints) |
-| `embed(text)` | Returns an embedding vector (`nomic-embed-text`, 768 floats) |
+| `embed(text)` | Returns an embedding vector from the `LLM_MODEL_EMBED` model |
 | `health()` | Checks Ollama is up and which of the expected models are present |
 
-`model` is a role, not a model name: `"reason"` → `qwen2.5:72b` for deep
-analysis, `"fast"` → `qwen2.5-coder:32b` for quick queries and config parsing.
-Edit `MODELS` in `llm/client.py` to change the mapping.
+`model` is a role or a literal model name: `"reason"` is for deep analysis and
+`"fast"` is for quick queries and config parsing. Each role maps to the model
+named in its `LLM_MODEL_*` setting below. Any other string is sent as the
+model name unchanged.
 
 `system` defaults to an IAM-analyst persona (ADFS claim rules, Okta
 policies, SAML/OIDC mechanics). Pass your own `system=` string to replace it,
-or `system=""` for none.
+or `system=""` to send no system message.
+
+**Type:** library. Install with `pip install -e .`; there is no command to run.
+
+## Settings
+
+All settings are environment variables, read on each call. The server URL and
+the model names have no default and must be set; the rest are optional.
+They are also listed in `.env.example` (the library does not load `.env` itself).
+For a local Ollama the URL is `http://localhost:11434`. Any model you have
+pulled works; the examples used so far are `qwen2.5:72b` (about 47 GB of memory),
+`qwen2.5-coder:32b` and `nomic-embed-text` (embeddings).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OLLAMA_BASE_URL` | none, required | Server base URL |
+| `LLM_MODEL_REASON` | none, required | Model for role `reason` |
+| `LLM_MODEL_FAST` | none, required | Model for role `fast` |
+| `LLM_MODEL_EMBED` | none, required | Model for `embed()` |
+| `LLM_TIMEOUT` | `300` | Seconds for chat and embedding requests |
+| `LLM_HEALTH_TIMEOUT` | `5` | Seconds for `health()` |
+| `LLM_API_KEY` | unset | Sent as `Authorization: Bearer ...` when set. Redirects are refused so the key is never forwarded |
+| `LLM_SYSTEM_PROMPT` | built-in IAM prompt | Replaces the default system prompt (empty counts as unset) |
+
+Redirects from the server are not followed. A reverse proxy that redirects
+(http to https, or a trailing-slash 301) now gives `RuntimeError: Ollama returned HTTP 301 ...`
+from `ask`, `ask_stream` and `embed`, or an error status from `health()`. Point
+`OLLAMA_BASE_URL` at the final URL.
+
+**Upgrading to 2.0:** earlier versions had built-in URL and model defaults.
+Callers such as `adfs-to-okta-migration` must now set `OLLAMA_BASE_URL` and the
+three `LLM_MODEL_*` variables, or calls raise `ValueError`.
 
 ## Usage
 
 ```python
 from llm.client import ask, ask_stream, embed, health
 
-print(health())                                   # {"status": "ok", "missing": []}
+print(health())  # {"status": "ok", "missing": []}
 
 answer = ask("What does this claim rule do?", context=rule_text)
 
@@ -47,41 +79,47 @@ for chunk in ask_stream("Summarize the anomalies", context=scan_json):
 vector = embed("Okta routing rule for group finance-users")
 ```
 
-The module lives at `llm/client.py`; import it from the repository root (or
-copy the file into your tool — it has no third-party dependencies).
+The module lives at `llm/client.py`. Install it with `pip install -e .`
+(add `.[dev]` for the tests and linter); it has no third-party dependencies.
+Run the tests with `pytest`; they use a local fake server, not Ollama.
 
 ## Requirements
 
-- Python 3.9+ (uses only the standard library)
-- Ollama running on `localhost:11434` with the models you map:
+- Python 3.10+ (uses only the standard library)
+- Ollama reachable at `OLLAMA_BASE_URL` with the models you named:
 
 ```bash
-ollama pull qwen2.5:72b
-ollama pull qwen2.5-coder:32b
-ollama pull nomic-embed-text
+ollama pull <model>     # once per LLM_MODEL_* value
 ollama serve
 ```
 
-The 72B model at Q4 needs roughly 47 GB of memory to stay resident.
-
 ## Behaviour worth knowing
 
-- **Timeouts are fixed:** 300 s for completions, 5 s for `health()`.
-- **Errors are raised as `RuntimeError`** with the Ollama base URL in the
-  message. Today an HTTP error from Ollama (404 unknown model, 400 bad
-  request) is reported with the same "unreachable" wording as a connection
-  failure — see *Known limitations*.
+- **Errors are raised as `RuntimeError`.** An HTTP error from Ollama (404
+  unknown model, 400 bad request) reports the status and response body; a
+  connection failure says "unreachable", and a timeout or socket error while
+  reading is also a `RuntimeError`. Malformed or unexpected responses are
+  `RuntimeError` too. A missing required setting or a non-numeric
+  `LLM_TIMEOUT` raises `ValueError` from `ask`, `ask_stream` and `embed`.
+  `ask_stream` is a generator, so its errors (including `ValueError`) appear
+  on the first iteration, not at the call.
+- **Error text is for developers.** Messages include the server's response
+  body. Do not show them to end users unfiltered.
+- **`health()` never raises**, including for a missing or invalid setting
+  such as `LLM_HEALTH_TIMEOUT=soon`; it returns
+  `{"status": "error", "detail": ...}` and logs a warning.
 - **Streaming** parses Ollama's `data: {...}` / `data: [DONE]` SSE lines and
   yields only the content deltas.
 
 ## Known limitations
 
-- `OLLAMA_BASE` is a constant; an environment-variable override is the next
-  change.
-- `HTTPError` is caught as `URLError`, so server-side errors are mislabeled
-  as "unreachable" and Ollama's error body is discarded.
 - No structured-output (`format=json` / schema) path yet.
-- Not packaged for `pip install`; no tests yet.
+- `health()` uses Ollama's `/api/tags`, so it works only against Ollama.
+- Plain `http://` is allowed; use an `https://` base URL for remote servers.
+  A warning is logged once per process when `LLM_API_KEY` is sent over `http://`.
+- `context` is placed in the prompt unchanged, so untrusted text can carry
+  prompt injection.
+- Large models need a lot of memory; pick `LLM_MODEL_*` values that fit your hardware.
 
 ## License
 

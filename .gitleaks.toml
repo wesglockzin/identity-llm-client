@@ -1,0 +1,8 @@
+# Keep the default rules. The one exception is the obviously fake key used in
+# the tests; any other match in any file, including the tests, is still reported.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake API key used in the test suite"
+regexes = ['''test-key-not-real''']

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "identity-llm-client"
+version = "2.0.0"
+description = "Dependency-free client for local LLM inference through Ollama's OpenAI-compatible endpoints."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0.3", "ruff>=0.5,<1"]
+
+[tool.setuptools]
+packages = ["llm"]
+
+[tool.deptry]
+pep621_dev_dependency_groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "BLE", "S110", "S112", "T20"]
