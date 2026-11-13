@@ -139,7 +139,7 @@ def _http_error(e: urllib.error.HTTPError) -> RuntimeError:
     try:
         body = e.read().decode(errors="replace")
     except OSError as read_err:
-        logger.warning("could not read body of HTTP %s error: %s", e.code, read_err)
+        logger.warning("could not read body of HTTP %s error: %r", e.code, read_err)
         body = "(body unreadable)"
     return RuntimeError(f"Ollama returned HTTP {e.code} from {base_url()}: {body}")
 

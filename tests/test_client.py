@@ -1,5 +1,7 @@
 import json
+import logging
 import threading
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -271,6 +273,20 @@ class BrokenBody:
 
     def __iter__(self):
         raise ConnectionResetError("reset")
+
+
+def test_unreadable_error_body_is_logged(caplog):
+    class Unreadable(urllib.error.HTTPError):
+        def read(self, *a, **k):
+            raise ConnectionResetError("reset")
+
+    err = Unreadable("http://x", 502, "bad", {}, None)
+    with caplog.at_level(logging.WARNING, logger=client.logger.name):
+        result = client._http_error(err)
+    assert str(result).endswith("(body unreadable)")
+    assert "502" in caplog.text
+    assert "could not read body of HTTP" in caplog.text
+    assert "ConnectionResetError" in caplog.text
 
 
 def test_socket_errors_while_reading_are_wrapped(fake, monkeypatch):

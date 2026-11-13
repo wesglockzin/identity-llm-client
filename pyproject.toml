@@ -17,6 +17,9 @@ dev = ["pytest>=9.0.3", "ruff>=0.5,<1"]
 [tool.setuptools]
 packages = ["llm"]
 
+[tool.deptry]
+pep621_dev_dependency_groups = ["dev"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
