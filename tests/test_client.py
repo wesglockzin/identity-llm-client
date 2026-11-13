@@ -209,7 +209,21 @@ def test_health_entry_without_name(fake):
     assert "model-r" in result["available_models"]
 
 
-@pytest.mark.parametrize("body", [b'{"models": ["a"]}', b'["a"]', b'{"models": 5}'])
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"models": ["a"]}',
+        b'["a"]',
+        b'{"models": 5}',
+        b'{"models": [{"name": 5}]}',
+        b'{"models": [{"name": 5}, {"name": "x"}]}',
+        b'{"models": [{"name": null}]}',
+        b'{"name": null}',
+        b"{}",
+        b'{"models": {}}',
+        b'{"models": ""}',
+    ],
+)
 def test_health_malformed_list_does_not_raise(fake, body):
     fake.routes["/api/tags"] = (200, body)
     assert client.health()["status"] == "error"

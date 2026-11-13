@@ -124,7 +124,7 @@ def _http_error(e: urllib.error.HTTPError) -> RuntimeError:
     try:
         body = e.read().decode(errors="replace")
     except OSError:
-        body = ""
+        body = "(body unreadable)"
     return RuntimeError(f"Ollama returned HTTP {e.code} from {base_url()}: {body}")
 
 
@@ -287,10 +287,12 @@ def health() -> dict:
         timeout = _float_env("LLM_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-        entries = data["models"] if isinstance(data, dict) and "models" in data else []
-        if not isinstance(data, dict) or not all(isinstance(m, dict) for m in entries):
+        entries = data.get("models") if isinstance(data, dict) else None
+        if not isinstance(entries, list) or not all(
+            isinstance(m, dict) and isinstance(m.get("name", ""), str) for m in entries
+        ):
             raise ValueError(f"Unexpected tags response shape: {data!r}")
-        available = {m.get("name", "") for m in entries}
+        available = {m["name"] for m in entries if "name" in m}
     except urllib.error.HTTPError as e:
         detail = str(_http_error(e))
         logger.warning("health check got HTTP %s", e.code)
