@@ -53,6 +53,10 @@ Be precise and concise. When analyzing configuration data, flag anomalies, misco
 and security concerns directly. Use IAM terminology accurately."""
 
 
+# The plain-http warning is logged once per process.
+_warned_plain_http = False
+
+
 def _required_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -95,7 +99,9 @@ def _headers() -> dict:
     headers = {"Content-Type": "application/json"}
     key = os.environ.get("LLM_API_KEY")
     if key:
-        if base_url().startswith("http://"):
+        global _warned_plain_http
+        if base_url().startswith("http://") and not _warned_plain_http:
+            _warned_plain_http = True
             logger.warning("LLM_API_KEY is sent over plain http://; prefer https://")
         headers["Authorization"] = f"Bearer {key}"
     return headers

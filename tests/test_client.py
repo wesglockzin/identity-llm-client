@@ -6,7 +6,7 @@ import pytest
 
 from llm import client
 
-
+FAKE_KEY = "test-key-not-real"
 MODELS = {"reason": "model-r", "fast": "model-f", "embed": "model-e"}
 
 
@@ -55,6 +55,7 @@ def fake(monkeypatch):
         "LLM_HEALTH_TIMEOUT",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(client, "_warned_plain_http", False)
     for role, model in MODELS.items():
         monkeypatch.setenv(client.MODEL_ENV_VARS[role], model)
     server = FakeOllama()
@@ -95,13 +96,13 @@ def test_empty_system_sends_no_system_message(fake):
 def test_env_overrides(fake, monkeypatch):
     monkeypatch.setenv("LLM_MODEL_REASON", "tiny:1b")
     monkeypatch.setenv("LLM_SYSTEM_PROMPT", "be brief")
-    monkeypatch.setenv("LLM_API_KEY", "dummy")
+    monkeypatch.setenv("LLM_API_KEY", FAKE_KEY)
     fake.routes["/v1/chat/completions"] = (200, chat_body("ok"))
     client.ask("q")
     _, payload, headers = fake.requests[0]
     assert payload["model"] == "tiny:1b"
     assert payload["messages"][0]["content"] == "be brief"
-    assert headers["Authorization"] == "Bearer " + "dummy"
+    assert headers["Authorization"] == f"Bearer {FAKE_KEY}"
 
 
 def test_http_error_reports_status_and_body(fake):
@@ -243,8 +244,19 @@ def test_socket_errors_while_reading_are_wrapped(fake, monkeypatch):
 
 
 def test_api_key_over_plain_http_logs_warning(fake, monkeypatch, caplog):
-    monkeypatch.setenv("LLM_API_KEY", "dummy")
+    monkeypatch.setenv("LLM_API_KEY", FAKE_KEY)
     fake.routes["/v1/chat/completions"] = (200, chat_body("ok"))
     with caplog.at_level("WARNING", logger="llm.client"):
         client.ask("q")
-    assert "plain http" in caplog.text
+        client.ask("q")
+    assert caplog.text.count("plain http") == 1
+
+
+def test_no_warning_without_key_or_over_https(fake, monkeypatch, caplog):
+    fake.routes["/v1/chat/completions"] = (200, chat_body("ok"))
+    with caplog.at_level("WARNING", logger="llm.client"):
+        client.ask("q")  # no key
+        monkeypatch.setenv("LLM_API_KEY", FAKE_KEY)
+        monkeypatch.setattr(client, "base_url", lambda: "https://example.invalid")
+        client._headers()
+    assert "plain http" not in caplog.text

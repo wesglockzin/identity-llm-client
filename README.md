@@ -92,6 +92,8 @@ ollama serve
   reading is also a `RuntimeError`. Malformed or unexpected responses are
   `RuntimeError` too. A missing required setting or a non-numeric
   `LLM_TIMEOUT` raises `ValueError` from `ask`, `ask_stream` and `embed`.
+  `ask_stream` is a generator, so its errors (including `ValueError`) appear
+  on the first iteration, not at the call.
 - **Error text is for developers.** Messages include the server's response
   body. Do not show them to end users unfiltered.
 - **`health()` never raises**, including for a missing or invalid setting
@@ -105,7 +107,7 @@ ollama serve
 - No structured-output (`format=json` / schema) path yet.
 - `health()` uses Ollama's `/api/tags`, so it works only against Ollama.
 - Plain `http://` is allowed; use an `https://` base URL for remote servers.
-  A warning is logged when `LLM_API_KEY` is sent over `http://`.
+  A warning is logged once per process when `LLM_API_KEY` is sent over `http://`.
 - `context` is placed in the prompt unchanged, so untrusted text can carry
   prompt injection.
 - Large models need a lot of memory; pick `LLM_MODEL_*` values that fit your hardware.
