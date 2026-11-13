@@ -275,7 +275,7 @@ class BrokenBody:
         raise ConnectionResetError("reset")
 
 
-def test_unreadable_error_body_is_logged(caplog):
+def test_unreadable_error_body_is_logged(fake, caplog):
     class Unreadable(urllib.error.HTTPError):
         def read(self, *a, **k):
             raise ConnectionResetError("reset")
