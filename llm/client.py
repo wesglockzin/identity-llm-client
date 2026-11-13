@@ -287,10 +287,14 @@ def health() -> dict:
         timeout = _float_env("LLM_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-        available = {m.get("name", "") for m in data.get("models", [])}
+        entries = data["models"] if isinstance(data, dict) and "models" in data else []
+        if not isinstance(data, dict) or not all(isinstance(m, dict) for m in entries):
+            raise ValueError(f"Unexpected tags response shape: {data!r}")
+        available = {m.get("name", "") for m in entries}
     except urllib.error.HTTPError as e:
+        detail = str(_http_error(e))
         logger.warning("health check got HTTP %s", e.code)
-        return {"status": "error", "detail": f"HTTP {e.code}: {e.reason}"}
+        return {"status": "error", "detail": detail}
     except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
         logger.warning("health check failed: %s", e)
         return {"status": "error", "detail": str(e)}

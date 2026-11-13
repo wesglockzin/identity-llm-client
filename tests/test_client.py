@@ -194,6 +194,27 @@ def test_health_errors_do_not_raise(fake, monkeypatch):
     assert client.health()["status"] == "error"
 
 
+def test_health_http_error_includes_body(fake):
+    fake.routes["/api/tags"] = (404, b"tags-body-here")
+    result = client.health()
+    assert result["status"] == "error"
+    assert "404" in result["detail"]
+    assert "tags-body-here" in result["detail"]
+
+
+def test_health_entry_without_name(fake):
+    fake.routes["/api/tags"] = (200, b'{"models": [{"size": 1}, {"name": "model-r"}]}')
+    result = client.health()
+    assert result["status"] == "ok"
+    assert "model-r" in result["available_models"]
+
+
+@pytest.mark.parametrize("body", [b'{"models": ["a"]}', b'["a"]', b'{"models": 5}'])
+def test_health_malformed_list_does_not_raise(fake, body):
+    fake.routes["/api/tags"] = (200, body)
+    assert client.health()["status"] == "error"
+
+
 def test_health_bad_timeout_does_not_raise(fake, monkeypatch):
     fake.routes["/api/tags"] = (200, b'{"models": []}')
     monkeypatch.setenv("LLM_HEALTH_TIMEOUT", "soon")
