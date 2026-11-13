@@ -55,12 +55,16 @@ pulled works; the examples used so far are `qwen2.5:72b` (about 47 GB of memory)
 | `LLM_API_KEY` | unset | Sent as `Authorization: Bearer ...` when set |
 | `LLM_SYSTEM_PROMPT` | built-in IAM prompt | Replaces the default system prompt |
 
+**Upgrading to 2.0:** earlier versions had built-in URL and model defaults.
+Callers such as `adfs-to-okta-migration` must now set `OLLAMA_BASE_URL` and the
+three `LLM_MODEL_*` variables, or calls raise `ValueError`.
+
 ## Usage
 
 ```python
 from llm.client import ask, ask_stream, embed, health
 
-print(health())                                   # {"status": "ok", "missing": []}
+print(health())  # {"status": "ok", "missing": []}
 
 answer = ask("What does this claim rule do?", context=rule_text)
 

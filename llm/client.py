@@ -287,7 +287,7 @@ def health() -> dict:
         timeout = _float_env("LLM_HEALTH_TIMEOUT", DEFAULT_HEALTH_TIMEOUT)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
-        available = {m["name"] for m in data.get("models", [])}
+        available = {m.get("name", "") for m in data.get("models", [])}
     except urllib.error.HTTPError as e:
         logger.warning("health check got HTTP %s", e.code)
         return {"status": "error", "detail": f"HTTP {e.code}: {e.reason}"}
